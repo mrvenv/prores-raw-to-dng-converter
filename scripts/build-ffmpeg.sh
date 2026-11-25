@@ -17,6 +17,12 @@ readonly FFMPEG_URL="https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz
 # The oldest macOS the bundled binaries run on.
 readonly MACOS_MIN_VERSION="12.0"
 
+# --disable-autodetect also turns off threading, which the prores_raw decoder
+# needs to use more than one core: each platform enables its own back to it
+# (THREAD_FLAG_POSIX, THREAD_FLAG_WINDOWS).
+readonly THREAD_FLAG_POSIX="--enable-pthreads"
+readonly THREAD_FLAG_WINDOWS="--enable-w32threads"
+
 readonly CONFIGURE_FLAGS=(
 	--disable-everything --disable-autodetect --disable-doc --disable-network
 	--disable-x86asm --enable-static --disable-shared
@@ -47,20 +53,24 @@ main() {
 	rm -rf "$src_dir"
 	tar -C "$work_dir" -xJf "$tarball"
 
-	local extra_flags=()
+	local flags=("${CONFIGURE_FLAGS[@]}")
 	case "$(uname -s)" in
 	Darwin)
 		export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-$MACOS_MIN_VERSION}"
+		flags+=("$THREAD_FLAG_POSIX")
 		;;
 	MINGW* | MSYS*)
 		# Without -static the binaries need the MinGW runtime DLLs next to them.
-		extra_flags+=(--extra-ldflags=-static)
+		flags+=("$THREAD_FLAG_WINDOWS" --extra-ldflags=-static)
+		;;
+	*)
+		flags+=("$THREAD_FLAG_POSIX")
 		;;
 	esac
 
 	(
 		cd "$src_dir"
-		./configure "${CONFIGURE_FLAGS[@]}" ${extra_flags[@]+"${extra_flags[@]}"}
+		./configure "${flags[@]}"
 		make -j"$(getconf _NPROCESSORS_ONLN)"
 	)
 
@@ -68,7 +78,7 @@ main() {
 	[[ -f "${src_dir}/ffmpeg.exe" ]] && exe_suffix=".exe"
 	cp "${src_dir}/ffmpeg${exe_suffix}" "${src_dir}/ffprobe${exe_suffix}" "$out_dir/"
 	cp "${src_dir}/COPYING.LGPLv2.1" "${out_dir}/ffmpeg-LICENSE.txt"
-	write_source_note "${out_dir}/ffmpeg-SOURCE.txt"
+	write_source_note "${out_dir}/ffmpeg-SOURCE.txt" "${flags[*]}"
 	if ! "${out_dir}/ffmpeg${exe_suffix}" -hide_banner -decoders | grep -q " prores_raw "; then
 		echo "built ffmpeg has no prores_raw decoder" >&2
 		exit 1
@@ -100,8 +110,10 @@ sha256() {
 	fi
 }
 
-# write_source_note records where the bundled binaries come from, as the LGPL
-# requires for redistribution.
+# write_source_note records where the bundled binaries come from and how they
+# were configured, as the LGPL requires for redistribution.
+#
+# usage: write_source_note <file> <configure flags>
 write_source_note() {
 	cat >"$1" <<EOF
 The ffmpeg and ffprobe binaries in this package are FFmpeg ${FFMPEG_VERSION},
@@ -109,7 +121,7 @@ licensed under the GNU Lesser General Public License 2.1 (ffmpeg-LICENSE.txt).
 
 Source: ${FFMPEG_URL}
 SHA-256: ${FFMPEG_SHA256}
-Configured with: ${CONFIGURE_FLAGS[*]}
+Configured with: $2
 EOF
 }
 

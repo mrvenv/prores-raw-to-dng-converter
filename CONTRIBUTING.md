@@ -64,7 +64,9 @@ clip.mov ──ffmpeg -c copy──▶ packets ──▶ prr.ParseHeader (WB, ma
 
 `convert.Convert` probes the clip and runs two ffmpeg processes: one copies the
 raw `prrf` packets, whose headers give each frame's black and white levels,
-white balance, colour matrix and gain; the other decodes to `bayer_rggb16le`.
+white balance, colour matrix and gain; the other decodes to `bayer_rggb16le`
+with `-thread_type slice` (ffmpeg's default frame threading keeps the
+`prores_raw` decoder on one core).
 Frames are paired by index and written by a worker pool.
 
 Colour: the header's camera→XYZ matrix is inverted into `ColorMatrix1`,
@@ -166,7 +168,9 @@ The macOS app is not signed or notarized; the release notes tell users to run
 tarball, pinned by version and SHA-256: static, LGPL (no `--enable-gpl`), with
 only the decoders, demuxer, muxers and filters the pipeline uses. Each archive
 ships `ffmpeg-LICENSE.txt` (LGPL 2.1) and `ffmpeg-SOURCE.txt` (source URL,
-checksum, configure flags), as the LGPL requires.
+checksum, configure flags), as the LGPL requires. `--disable-autodetect` turns
+threading off too, so the script enables it per platform (pthreads, Win32
+threads on Windows): without it the decoder runs on one core.
 
 CI caches the build per platform, keyed by the script's hash: changing the
 version, the flags or the script rebuilds it. When the pipeline starts using a

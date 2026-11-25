@@ -43,6 +43,11 @@ const (
 	// whole 16-bit frames, so it gets the larger buffer.
 	packetReadBuffer = 4 << 20
 	decodeReadBuffer = 8 << 20
+	// decodeThreadType makes ffmpeg decode the tiles of one frame in
+	// parallel. Its default, frame threading, keeps prores_raw on one core;
+	// slice threading decoded a 5.7K clip seven times faster, to identical
+	// output.
+	decodeThreadType = "slice"
 	// audioCodec stores the WAV as 24-bit PCM.
 	audioCodec = "pcm_s24le"
 	// audioDurationFormat is the -t value that trims audio to -frames.
@@ -151,7 +156,7 @@ func Convert(ctx context.Context, tools ffmpeg.Tools, input string, opt Options)
 	if err != nil {
 		return res, fmt.Errorf("ffmpeg (packets): %w", err)
 	}
-	decArgs := append([]string{"-v", "error", "-nostdin", "-apply_cropping", "none", "-i", input, "-map", "0:v:0"}, limit...)
+	decArgs := append([]string{"-v", "error", "-nostdin", "-thread_type", decodeThreadType, "-apply_cropping", "none", "-i", input, "-map", "0:v:0"}, limit...)
 	decArgs = append(decArgs, "-f", "rawvideo", "-pix_fmt", "bayer_rggb16le", "-")
 	decCmd := ffmpeg.Command(ctx, tools.FFmpeg, decArgs...)
 	decCmd.Stderr = &decErr
