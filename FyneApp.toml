@@ -1,0 +1,5 @@
+[Details]
+Icon = "Icon.png"
+Name = "ProRes Raw to DNG Converter"
+ID = "com.rawconv.app"
+Build = 3

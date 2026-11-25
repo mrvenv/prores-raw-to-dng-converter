@@ -1,0 +1,177 @@
+# Builds rawconv for every platform and publishes a GitHub release:
+#   push to main -> release v<VERSION>
+#   push to dev  -> pre-release v<VERSION>-beta.<run number>
+# The version comes only from the VERSION file; see CONTRIBUTING.md, "Releasing".
+name: Release
+
+on:
+  # Automatic releases are off until the repository is published; start from
+  # the Actions tab and pick main (release) or dev (beta). Uncomment to
+  # release on every push again.
+  # push:
+  #   branches: [main, dev]
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  FYNE_TOOLS_VERSION: v1.7.4
+  FFMPEG_DIR: third_party/ffmpeg
+  DIST_DIR: dist
+
+jobs:
+  check:
+    uses: ./.github/workflows/ci.yml
+
+  version:
+    name: Resolve version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      prerelease: ${{ steps.resolve.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Resolve version from VERSION
+        id: resolve
+        env:
+          BRANCH: ${{ github.ref_name }}
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          base="$(tr -d '[:space:]' < VERSION)"
+          if [[ ! "$base" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error file=VERSION::VERSION must be x.y.z, got '$base'"
+            exit 1
+          fi
+          # A released version is final: both its betas and a second release
+          # would be ambiguous, so the next change must bump VERSION first.
+          if git ls-remote --exit-code --tags origin "refs/tags/v${base}" > /dev/null; then
+            echo "::error file=VERSION::v${base} is already released; bump VERSION"
+            exit 1
+          fi
+          if [[ "$BRANCH" == "main" ]]; then
+            version="$base"
+            prerelease=false
+          else
+            version="${base}-beta.${RUN_NUMBER}"
+            prerelease=true
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "prerelease=${prerelease}" >> "$GITHUB_OUTPUT"
+          echo "Version: ${version} (prerelease: ${prerelease})"
+
+  build:
+    name: Build (${{ matrix.platform }})
+    needs: [check, version]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-arm64
+            os: macos-latest
+            shell: bash
+          - platform: macos-amd64
+            os: macos-15-intel
+            shell: bash
+          - platform: linux-amd64
+            # The oldest supported Ubuntu, so the binaries need an old glibc.
+            os: ubuntu-22.04
+            shell: bash
+          - platform: windows-amd64
+            os: windows-latest
+            shell: msys2 {0}
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Set up MSYS2 (Windows)
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          path-type: inherit
+          install: make diffutils zip curl mingw-w64-x86_64-gcc
+
+      - name: Install Fyne system libraries (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libgl1-mesa-dev xorg-dev libxkbcommon-dev
+
+      - name: Restore ffmpeg
+        id: ffmpeg-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.FFMPEG_DIR }}
+          key: ffmpeg-${{ matrix.platform }}-${{ hashFiles('scripts/build-ffmpeg.sh') }}
+
+      - name: Build ffmpeg
+        if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
+        run: scripts/build-ffmpeg.sh "$FFMPEG_DIR"
+
+      - name: Install the fyne tool
+        run: go install "fyne.io/tools/cmd/fyne@${FYNE_TOOLS_VERSION}"
+
+      - name: Package
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          BUILD_NUMBER: ${{ github.run_number }}
+        run: scripts/package.sh "$VERSION" "$FFMPEG_DIR" "$DIST_DIR"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.platform }}
+          path: ${{ env.DIST_DIR }}/rawconv-*
+          if-no-files-found: error
+
+  publish:
+    name: Publish release
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: dist-*
+          path: ${{ env.DIST_DIR }}
+          merge-multiple: true
+
+      - name: Write checksums
+        working-directory: ${{ env.DIST_DIR }}
+        run: sha256sum rawconv-* > SHA256SUMS.txt
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: v${{ needs.version.outputs.version }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
+          INSTALL_NOTES: |
+            Every archive bundles ffmpeg; nothing else needs installing.
+
+            **macOS:** the app is not signed. After unzipping, run
+            `xattr -dr com.apple.quarantine "ProRes Raw to DNG Converter.app"` once, or open it with right-click → Open.
+        run: |
+          flags=()
+          if [[ "$PRERELEASE" == "true" ]]; then
+            flags+=(--prerelease)
+          fi
+          gh release create "$TAG" "$DIST_DIR"/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "$TAG" \
+            --notes "$INSTALL_NOTES" \
+            --generate-notes \
+            "${flags[@]}"
