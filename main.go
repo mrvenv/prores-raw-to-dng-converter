@@ -229,6 +229,8 @@ func (u *ui) build() {
 		container.NewHBox(u.audio, widget.NewLabel(compressionLabel), u.compression, layout.NewSpacer(), u.cancel, u.start),
 		u.total,
 		u.logBox,
+		widget.NewSeparator(),
+		u.supportFooter(),
 	)
 	u.win.SetContent(container.NewPadded(container.NewBorder(top, bottom, nil, nil, listArea)))
 

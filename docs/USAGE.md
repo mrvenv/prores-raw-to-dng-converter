@@ -20,6 +20,8 @@ and open them in DaVinci Resolve. Not installed yet? See
 │                                       [Cancel] [Convert] │
 │ ██████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  │  ← all clips
 │ log…                                                     │
+│ ──────────────────────────────────────────────────────── │
+│         Free and open source. … buy me a coffee          │  ← support link
 └──────────────────────────────────────────────────────────┘
 ```
 
