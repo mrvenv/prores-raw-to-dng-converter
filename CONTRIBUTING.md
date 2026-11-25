@@ -10,8 +10,8 @@ are in [AGENTS.md](AGENTS.md); they apply to people as much as to agents.
 Requirements:
 
 * Go (version in `go.mod`) and a C compiler: the GUI uses cgo/OpenGL (Xcode
-  command line tools on macOS, MinGW-w64 on Windows, `libgl1-mesa-dev xorg-dev`
-  on Linux).
+  command line tools on macOS, MinGW-w64 on Windows, `libgl1-mesa-dev xorg-dev
+  libxkbcommon-dev libwayland-dev` on Linux: the GUI supports both X11 and Wayland).
 * ffmpeg 8.0+ with the `prores_raw` decoder. `make ffmpeg` builds the same
   minimal one the releases bundle into `third_party/ffmpeg`.
 
