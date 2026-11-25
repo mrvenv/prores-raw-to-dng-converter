@@ -261,7 +261,7 @@ func (u *ui) logf(format string, a ...any) {
 }
 
 func (u *ui) detectFFmpeg() {
-	t, err := ffmpeg.Find()
+	t, err := ffmpeg.Find(context.Background())
 	fyne.Do(func() {
 		u.tools, u.toolErr = t, err
 		if err != nil {

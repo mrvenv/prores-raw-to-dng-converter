@@ -116,7 +116,7 @@ We build on Robert Martin's "Clean Code" and on "Effective Go". Code is for huma
 ## Concurrency
 
 - Every goroutine has an owner that waits for it (`sync.WaitGroup`, `errgroup`) and a way to stop (`context`).
-- Cancellation goes through `context`; external processes are started with `exec.CommandContext`.
+- Cancellation goes through `context`; external processes are started with `ffmpeg.Command`, which wraps `exec.CommandContext`.
 - Shared state is guarded by a mutex or owned by one goroutine; `go test -race ./...` stays clean.
 - In the GUI, widgets are touched only on the UI thread: from a worker goroutine go through `fyne.Do`.
 
@@ -131,7 +131,8 @@ We build on Robert Martin's "Clean Code" and on "Effective Go". Code is for huma
 
 - ffmpeg and ffprobe are found only through `ffmpeg.Find()`; the search order (`RAWCONV_FFMPEG_DIR`, next to the executable, its `ffmpeg/` subdirectory, `../Resources` of the app bundle, `PATH`, the Homebrew/MacPorts dirs) lives there and nowhere else.
 - The required ffmpeg is 8.0+ with the `prores_raw` decoder; a feature that needs more checks for it the way `HasProResRAW` does.
-- Arguments are passed as a slice to `exec.CommandContext`, never through a shell.
+- ffmpeg and ffprobe processes are started only through `ffmpeg.Command(ctx, path, args...)`, never `exec.Command` directly: on Windows it hides the console window that a child of the windowed GUI would otherwise get.
+- Arguments are passed as a slice, never through a shell.
 
 ## GUI (`main.go`, Fyne)
 
@@ -237,7 +238,7 @@ These show the procedure on made-up tasks; they are not tasks to do.
 
 **A new convention.** You add a "Pipeline" section to `CONTRIBUTING.md` and move every note about the pipeline that lives in code comments, `docs/` or elsewhere into it.
 
-**A new helper.** You add `runFFmpeg()` that starts a process and captures its stderr into the error. You then find every `exec.CommandContext` call in `internal/`, switch them to the helper and delete the copies.
+**A new helper.** You add `runFFmpeg()` that starts a process and captures its stderr into the error. You then find every `ffmpeg.Command` call in `internal/`, switch them to the helper and delete the copies.
 
 **A bug fix.** The user reports a green cast in Resolve. You check which colour matrix and white balance reach the DNG (`color.go`, the `prr` header, the DNG tags) against the spec before changing anything, fix the cause, and say whether you reproduced it on a real clip.
 

@@ -27,6 +27,11 @@ ffmpeg is found only by `ffmpeg.Find`, in this order: `$RAWCONV_FFMPEG_DIR`,
 next to the executable, its `ffmpeg/` subdirectory, `../Resources` of the app
 bundle, `$PATH`, `/opt/homebrew/bin`, `/usr/local/bin`, `/opt/local/bin`.
 
+Every ffmpeg and ffprobe process is started with `ffmpeg.Command`, never
+`exec.Command` directly. On Windows it starts the process with
+`CREATE_NO_WINDOW`: the GUI is a windowed app without a console, so Windows
+would otherwise open a terminal window for each ffmpeg a conversion runs.
+
 Before sending a change: `gofmt -l .` prints nothing, `go vet ./...` and
 `go test -race ./...` pass, and a change to the conversion path is tried on a
 few frames of a real clip (`rawconv-cli -frames 5`). Sample clips and output

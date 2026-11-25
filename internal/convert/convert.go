@@ -10,7 +10,6 @@ import (
 	"io"
 	"math"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -24,7 +23,31 @@ import (
 	"rawconv/internal/timecode"
 )
 
+// Software is written into the DNG Software tag.
 const Software = "rawconv"
+
+// Pipeline sizes.
+const (
+	// outDirPerm is the permission of the created output folder.
+	outDirPerm = 0o755
+	// minAutoWorkers and maxAutoWorkers bound the automatic worker count,
+	// which is otherwise one per CPU.
+	minAutoWorkers = 2
+	maxAutoWorkers = 6
+	// spareFrameBuffers are frame buffers beyond one per worker, so the
+	// reader can fill the next frame while every worker is busy.
+	spareFrameBuffers = 2
+	// bytesPerSensel is the size of a bayer_rggb16le sample.
+	bytesPerSensel = 2
+	// Read buffers for the two ffmpeg streams; the decoded one carries
+	// whole 16-bit frames, so it gets the larger buffer.
+	packetReadBuffer = 4 << 20
+	decodeReadBuffer = 8 << 20
+	// audioCodec stores the WAV as 24-bit PCM.
+	audioCodec = "pcm_s24le"
+	// audioDurationFormat is the -t value that trims audio to -frames.
+	audioDurationFormat = "%.6f"
+)
 
 // Options controls a conversion.
 type Options struct {
@@ -81,7 +104,7 @@ func Convert(ctx context.Context, tools ffmpeg.Tools, input string, opt Options)
 	if err != nil {
 		return res, err
 	}
-	if probe.Codec != "prores_raw" {
+	if probe.Codec != ffmpeg.ProResRAWCodec {
 		return res, fmt.Errorf("%s: codec is %q, not ProRes RAW", filepath.Base(input), probe.Codec)
 	}
 	total := probe.Frames
@@ -91,13 +114,13 @@ func Convert(ctx context.Context, tools ffmpeg.Tools, input string, opt Options)
 
 	base := OutputName(input, opt.Compression)
 	outDir := filepath.Join(opt.OutDir, base)
-	if err := os.MkdirAll(outDir, 0o755); err != nil {
-		return res, err
+	if err := os.MkdirAll(outDir, outDirPerm); err != nil {
+		return res, fmt.Errorf("create output folder: %w", err)
 	}
 	res.OutDir = outDir
 	camera := cameraInfoFromProbe(probe)
 	if err := writeMetadata(outDir, input, probe); err != nil {
-		return res, err
+		return res, fmt.Errorf("write metadata: %w", err)
 	}
 	opt.logf("%s", camera.Summary())
 
@@ -122,35 +145,37 @@ func Convert(ctx context.Context, tools ffmpeg.Tools, input string, opt Options)
 	var pktErr, decErr bytes.Buffer
 	pktArgs := append([]string{"-v", "error", "-nostdin", "-i", input, "-map", "0:v:0"}, limit...)
 	pktArgs = append(pktArgs, "-c", "copy", "-f", "data", "-")
-	pktCmd := exec.CommandContext(ctx, tools.FFmpeg, pktArgs...)
+	pktCmd := ffmpeg.Command(ctx, tools.FFmpeg, pktArgs...)
 	pktCmd.Stderr = &pktErr
 	pktOut, err := pktCmd.StdoutPipe()
 	if err != nil {
-		return res, err
+		return res, fmt.Errorf("ffmpeg (packets): %w", err)
 	}
 	decArgs := append([]string{"-v", "error", "-nostdin", "-apply_cropping", "none", "-i", input, "-map", "0:v:0"}, limit...)
 	decArgs = append(decArgs, "-f", "rawvideo", "-pix_fmt", "bayer_rggb16le", "-")
-	decCmd := exec.CommandContext(ctx, tools.FFmpeg, decArgs...)
+	decCmd := ffmpeg.Command(ctx, tools.FFmpeg, decArgs...)
 	decCmd.Stderr = &decErr
 	decOut, err := decCmd.StdoutPipe()
 	if err != nil {
-		return res, err
+		return res, fmt.Errorf("ffmpeg (decode): %w", err)
 	}
 	if err := pktCmd.Start(); err != nil {
-		return res, err
+		return res, fmt.Errorf("start ffmpeg (packets): %w", err)
 	}
 	if err := decCmd.Start(); err != nil {
 		cancel()
-		pktCmd.Wait()
-		return res, err
+		// The packet process was just killed by cancel; its exit error
+		// says only that, and the start failure is the cause to report.
+		_ = pktCmd.Wait()
+		return res, fmt.Errorf("start ffmpeg (decode): %w", err)
 	}
 
 	workers := opt.Workers
 	if workers <= 0 {
-		workers = max(2, min(runtime.NumCPU(), 6))
+		workers = max(minAutoWorkers, min(runtime.NumCPU(), maxAutoWorkers))
 	}
 	jobs := make(chan job, workers)
-	free := make(chan []byte, workers+2)
+	free := make(chan []byte, workers+spareFrameBuffers)
 	var done atomic.Int64
 	var progMu sync.Mutex
 	var firstErr error
@@ -182,8 +207,8 @@ func Convert(ctx context.Context, tools ffmpeg.Tools, input string, opt Options)
 		}()
 	}
 
-	pr := prr.NewPacketReader(bufio.NewReaderSize(pktOut, 4<<20))
-	dec := bufio.NewReaderSize(decOut, 8<<20)
+	pr := prr.NewPacketReader(bufio.NewReaderSize(pktOut, packetReadBuffer))
+	dec := bufio.NewReaderSize(decOut, decodeReadBuffer)
 	frameSize := 0
 	idx := 0
 readLoop:
@@ -203,14 +228,14 @@ readLoop:
 		if idx == 0 {
 			res.Header = hdr
 			res.Color = ColorFromHeader(hdr)
-			frameSize = hdr.Width * hdr.Height * 2
-			for i := 0; i < workers+2; i++ {
+			frameSize = hdr.Width * hdr.Height * bytesPerSensel
+			for i := 0; i < workers+spareFrameBuffers; i++ {
 				free <- make([]byte, frameSize)
 			}
 			opt.logf("header: vendor=%q %dx%d range=%d WB(R=%.4f B=%.4f) CCT=%dK gain=%.3f postWB=%v fallback=%v",
 				hdr.Vendor, hdr.Width, hdr.Height, hdr.SenselValueRange, hdr.WBRed, hdr.WBBlue,
 				hdr.WBCCT, hdr.Gain, res.Color.PostWB, res.Color.Fallback)
-		} else if hdr.Width*hdr.Height*2 != frameSize {
+		} else if hdr.Width*hdr.Height*bytesPerSensel != frameSize {
 			fail(fmt.Errorf("frame %d: resolution changed mid-clip", idx))
 			break
 		}
@@ -244,9 +269,11 @@ readLoop:
 	}
 	close(jobs)
 	wg.Wait()
-	// Drain so ffmpeg can exit if we stopped reading early.
-	go io.Copy(io.Discard, pktOut)
-	go io.Copy(io.Discard, decOut)
+	// Drain so ffmpeg can exit if we stopped reading early. Wait closes
+	// the pipes, which ends both copies; a copy error then is expected and
+	// the processes' own exit status is what gets reported.
+	go func() { _, _ = io.Copy(io.Discard, pktOut) }()
+	go func() { _, _ = io.Copy(io.Discard, decOut) }()
 	pErr, dErr := pktCmd.Wait(), decCmd.Wait()
 
 	if firstErr != nil {
@@ -265,12 +292,12 @@ readLoop:
 
 	if opt.Audio && probe.HasAudio {
 		wav := filepath.Join(outDir, base+".wav")
-		args := []string{"-v", "error", "-nostdin", "-y", "-i", input, "-map", "0:a:0", "-c:a", "pcm_s24le"}
+		args := []string{"-v", "error", "-nostdin", "-y", "-i", input, "-map", "0:a:0", "-c:a", audioCodec}
 		if opt.MaxFrames > 0 && probe.FPS() > 0 {
-			args = append(args, "-t", fmt.Sprintf("%.6f", float64(res.Frames)/probe.FPS()))
+			args = append(args, "-t", fmt.Sprintf(audioDurationFormat, float64(res.Frames)/probe.FPS()))
 		}
 		args = append(args, wav)
-		if out, err := exec.CommandContext(ctx, tools.FFmpeg, args...).CombinedOutput(); err != nil {
+		if out, err := ffmpeg.Command(ctx, tools.FFmpeg, args...).CombinedOutput(); err != nil {
 			return res, fmt.Errorf("audio: %v %s", err, strings.TrimSpace(string(out)))
 		}
 	}
@@ -331,7 +358,7 @@ func (w frameWriter) write(j job) error {
 	path := filepath.Join(w.outDir, fmt.Sprintf(frameNameFormat, w.base, j.idx))
 	fh, err := os.Create(path)
 	if err != nil {
-		return err
+		return fmt.Errorf("create frame: %w", err)
 	}
 	if err := dng.Write(fh, f); err != nil {
 		_ = fh.Close() // the write error is the one worth reporting

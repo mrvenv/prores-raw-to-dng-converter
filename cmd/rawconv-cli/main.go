@@ -54,15 +54,15 @@ func main() {
 		os.Exit(exitBadUsage)
 	}
 
-	tools, err := ffmpeg.Find()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	tools, err := ffmpeg.Find(ctx)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(exitConversionFailed)
 	}
 	fmt.Println("using", tools.FFmpeg, "-", tools.Version)
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
 
 	failed := 0
 	for _, in := range flag.Args() {
