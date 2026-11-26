@@ -63,6 +63,8 @@ type ColorInfo struct {
 	BaselineExposure float64
 	PostWB           bool // header matrix applies to white-balanced RGB
 	Fallback         bool // header matrix unusable, sRGB used instead
+	AutoWB           bool // header had no white balance; measured from pixels
+	AutoExposure     bool // header had no gain; exposure measured from pixels
 }
 
 // sRGB(D65) XYZ->linear RGB, used if the header matrix is singular.
@@ -71,18 +73,23 @@ var srgbFromXYZ = mat3{3.2406, -1.5372, -0.4986, -0.9689, 1.8758, 0.0415, 0.0557
 // ColorFromHeader derives DNG colour tags. ProRes RAW provides a
 // camera->XYZ(D65) matrix; whether it expects white-balanced input is
 // detected by checking which interpretation maps a neutral to D65 white.
-func ColorFromHeader(h prr.Header) ColorInfo {
-	valid := func(x float64) bool { return x > 0 && !math.IsNaN(x) && !math.IsInf(x, 0) }
+// White balance or exposure missing from the header comes from auto when
+// it measured them; otherwise white balance is left neutral and exposure 0.
+func ColorFromHeader(h prr.Header, auto AutoColor) ColorInfo {
+	var ci ColorInfo
 	wbR, wbB := h.WBRed, h.WBBlue
-	if !valid(wbR) {
-		wbR = 1
+	if !validFactor(wbR) || !validFactor(wbB) {
+		wbR, wbB = 1, 1
+		if auto.HasWB {
+			wbR, wbB, ci.AutoWB = auto.WBRed, auto.WBBlue, true
+		}
 	}
-	if !valid(wbB) {
-		wbB = 1
-	}
-	ci := ColorInfo{AsShotNeutral: [3]float64{1 / wbR, 1, 1 / wbB}}
-	if valid(h.Gain) {
+	ci.AsShotNeutral = [3]float64{1 / wbR, 1, 1 / wbB}
+	switch {
+	case validFactor(h.Gain):
 		ci.BaselineExposure = math.Log2(h.Gain) - gainExposureOffset
+	case auto.HasExposure:
+		ci.BaselineExposure, ci.AutoExposure = auto.Exposure, true
 	}
 
 	m := mat3(h.ColorMatrix)

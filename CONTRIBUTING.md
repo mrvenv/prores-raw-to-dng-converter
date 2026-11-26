@@ -76,6 +76,16 @@ Resolve than the source; DNGs Resolve shows at the source's brightness carry
 exactly `log2(gain) - 4`. macOS ignores `BaselineExposure`, so exposure can
 only be checked in Resolve.
 
+When the first frame's header has no usable white balance or gain,
+`MeasureAuto` (`auto.go`) measures them from that frame's pixels once, for
+the whole clip: white balance by grey world (the average colour, without
+clipped and near-black sensels, is neutral), exposure so the median green
+lands where it does on the checked clips (`autoMidGreyStops`), within 4
+stops of their typical `BaselineExposure`. A header's own values always win;
+the log warns when auto was used. On the GH7 and Sony samples auto exposure
+lands within 0.25 stops of the header's, auto white balance within 0.3 stops
+(grey world drifts when one colour fills the frame).
+
 ## Compression internals
 
 Ratios are against uncompressed 12-bit raw. A ratio mode is calibrated once,

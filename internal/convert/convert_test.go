@@ -3,9 +3,13 @@ package convert
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"io"
+	"math"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -100,6 +104,58 @@ func TestConvertReportsStreamError(t *testing.T) {
 	_, err := Convert(context.Background(), src, "clip.mov", Options{OutDir: t.TempDir()})
 	if !errors.Is(err, src.packets.err) {
 		t.Errorf("got %v, want the packet stream's error", err)
+	}
+}
+
+// prrfPacket builds a ProRes RAW packet whose header has the given size,
+// an identity colour matrix and no white balance or gain (all zero), laid
+// out as prr.ParseHeader reads it.
+func prrfPacket(width, height, senselRange int) []byte {
+	const (
+		packetLen   = 96
+		headerLen   = 88
+		matrixStart = 36
+		floatLen    = 4
+		matrixSide  = 3
+	)
+	be := binary.BigEndian
+	pkt := make([]byte, packetLen)
+	be.PutUint32(pkt[0:], packetLen)
+	copy(pkt[4:], "prrf")
+	be.PutUint16(pkt[8:], headerLen)
+	copy(pkt[12:], "test")
+	be.PutUint16(pkt[16:], uint16(width))
+	be.PutUint16(pkt[18:], uint16(height))
+	be.PutUint16(pkt[26:], uint16(senselRange))
+	for i := 0; i < matrixSide; i++ {
+		be.PutUint32(pkt[matrixStart+floatLen*(i*matrixSide+i):], math.Float32bits(1))
+	}
+	return pkt
+}
+
+func TestConvertMeasuresMissingColour(t *testing.T) {
+	const width, height = 16, 16
+	pkt := prrfPacket(width, height, testRange)
+	data, _ := bayerFrame(0.1, 0.2, 0.16, nil)
+	src := newFakeSource(ffmpeg.ProResRAWCodec)
+	src.packets.Reader = bytes.NewReader(pkt)
+	src.frames.Reader = bytes.NewReader(data[:width*height*bytesPerSensel])
+	var log []string
+	res, err := Convert(context.Background(), src, "clip.mov", Options{
+		OutDir: t.TempDir(), Compression: dng.Uncompressed,
+		Log: func(s string) { log = append(log, s) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Frames != 1 || !res.Color.AutoWB || !res.Color.AutoExposure {
+		t.Fatalf("frames %d AutoWB %v AutoExposure %v, want 1 frame with both measured",
+			res.Frames, res.Color.AutoWB, res.Color.AutoExposure)
+	}
+	for _, want := range []string{"auto white balance", "auto exposure"} {
+		if !slices.ContainsFunc(log, func(line string) bool { return strings.Contains(line, want) }) {
+			t.Errorf("log %q has no %q warning", log, want)
+		}
 	}
 }
 

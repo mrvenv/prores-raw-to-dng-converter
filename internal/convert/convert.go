@@ -226,14 +226,10 @@ readLoop:
 		}
 		if idx == 0 {
 			res.Header = hdr
-			res.Color = ColorFromHeader(hdr)
 			frameSize = hdr.Width * hdr.Height * bytesPerSensel
 			for i := 0; i < workers+spareFrameBuffers; i++ {
 				free <- make([]byte, frameSize)
 			}
-			opt.logf("header: vendor=%q %dx%d range=%d WB(R=%.4f B=%.4f) CCT=%dK gain=%.3f postWB=%v fallback=%v",
-				hdr.Vendor, hdr.Width, hdr.Height, hdr.SenselValueRange, hdr.WBRed, hdr.WBBlue,
-				hdr.WBCCT, hdr.Gain, res.Color.PostWB, res.Color.Fallback)
 		} else if hdr.Width*hdr.Height*bytesPerSensel != frameSize {
 			fail(fmt.Errorf("frame %d: resolution changed mid-clip", idx))
 			break
@@ -251,6 +247,12 @@ readLoop:
 			break
 		}
 		j := job{idx: idx, buf: buf, hdr: hdr}
+		if idx == 0 {
+			// Like calibrate below, this is written before any worker
+			// receives a job.
+			res.Color = fw.measureColor(j)
+			logColor(opt, hdr, res.Color, fw.auto)
+		}
 		if idx == 0 && opt.Compression.TargetRatio() > 0 {
 			// Workers read fw only after receiving a job, so this write
 			// happens before any of them uses the calibration.
@@ -324,6 +326,39 @@ type frameWriter struct {
 	// the curve and DCT ratio modes.
 	curveLevels int
 	quantScale  float64
+	// auto is measured once, from the first frame, when its header lacks
+	// white balance or exposure.
+	auto AutoColor
+}
+
+// measureColor measures auto colour from the first frame when its header
+// needs it, and returns the colour the clip starts with.
+func (w *frameWriter) measureColor(first job) ColorInfo {
+	if NeedsAuto(first.hdr) {
+		w.auto = MeasureAuto(first.buf, first.hdr)
+	}
+	return ColorFromHeader(first.hdr, w.auto)
+}
+
+// logColor reports the first frame's header and the colour derived from
+// it, warning when white balance or exposure had to be measured or left
+// at a neutral default.
+func logColor(opt Options, hdr prr.Header, ci ColorInfo, auto AutoColor) {
+	opt.logf("header: vendor=%q %dx%d range=%d WB(R=%.4f B=%.4f) CCT=%dK gain=%.3f postWB=%v fallback=%v",
+		hdr.Vendor, hdr.Width, hdr.Height, hdr.SenselValueRange, hdr.WBRed, hdr.WBBlue,
+		hdr.WBCCT, hdr.Gain, ci.PostWB, ci.Fallback)
+	switch {
+	case ci.AutoWB:
+		opt.logf("warning: the clip has no white balance; using auto white balance (R=%.3f B=%.3f)", auto.WBRed, auto.WBBlue)
+	case !validFactor(hdr.WBRed) || !validFactor(hdr.WBBlue):
+		opt.logf("warning: the clip has no white balance and none could be measured; set it in Resolve")
+	}
+	switch {
+	case ci.AutoExposure:
+		opt.logf("warning: the clip has no exposure gain; using auto exposure (%+.2f stops)", ci.BaselineExposure)
+	case !validFactor(hdr.Gain):
+		opt.logf("warning: the clip has no exposure gain and none could be measured; set Exposure in Resolve")
+	}
 }
 
 // recordedOnPrefix starts the ImageDescription naming an external recorder.
@@ -375,7 +410,7 @@ func (w frameWriter) write(j job) error {
 // frame describes job j as a DNG frame.
 func (w frameWriter) frame(j job) *dng.Frame {
 	h, probe, cam := j.hdr, w.probe, w.camera
-	ci := ColorFromHeader(h)
+	ci := ColorFromHeader(h, w.auto)
 	ucm := cam.UniqueModel()
 	if ucm == "" {
 		ucm = "ProRes RAW " + strings.TrimSpace(h.Vendor)

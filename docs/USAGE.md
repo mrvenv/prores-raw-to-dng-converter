@@ -96,6 +96,8 @@ the compression reached, and the result. Things to look for:
 | --- | --- |
 | `⚠ ffmpeg with ProRes RAW support (8.0+) not found` at the top | The app cannot find its ffmpeg: keep the app's files together, or reinstall. **Convert** stays off until it is found. |
 | `warning: 8:1 would posterise this clip; stopping at its noise floor, about 5.2:1` | A `3:1`/`5:1`/`8:1` mode stopped short of its ratio to avoid banding on clean footage. Use a `Resolve only` mode for higher ratios. |
+| `warning: the clip has no white balance; using auto white balance` | The camera or recorder wrote no white balance, so it was estimated from the first frame. Check it in Resolve and adjust **Color Temp** / **Tint** if needed. |
+| `warning: the clip has no exposure gain; using auto exposure (+0.40 stops)` | The clip carries no exposure, so it was estimated from the first frame. Brightness may differ from the source; adjust **Exposure** in Resolve if needed. |
 | `ERROR <clip>: …` | The clip failed; the rest of the list still converts. Often: not ProRes RAW, or the disk is full. |
 | `skip <path>: …` | A dropped file or folder could not be read. |
 

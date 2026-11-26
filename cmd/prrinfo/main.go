@@ -15,60 +15,82 @@ import (
 	"rawconv/internal/prr"
 )
 
+// Exit codes.
+const (
+	exitFailed   = 1
+	exitBadUsage = 2
+)
+
+// Scanning settings.
+const (
+	readBuffer = 1 << 20
+	scanChunk  = 8 << 20
+	// headerWindow is kept past a "prrf" match, so a header that straddles
+	// two chunks is still parsed whole.
+	headerWindow = 512
+	// sizeFieldLen is the packet size that precedes the "prrf" fourcc.
+	sizeFieldLen = 4
+	fourCC       = "prrf"
+)
+
 func main() {
 	n := flag.Int("n", 1, "number of frame headers to print")
 	flag.Parse()
 	if flag.NArg() != 1 {
 		fmt.Fprintln(os.Stderr, "usage: prrinfo [-n N] clip.mov")
-		os.Exit(2)
+		os.Exit(exitBadUsage)
 	}
 	f, err := os.Open(flag.Arg(0))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		os.Exit(exitFailed)
 	}
-	defer f.Close()
+	// The file is only read, so a close error loses nothing.
+	defer func() { _ = f.Close() }()
 
-	r := bufio.NewReaderSize(f, 1<<20)
-	const chunk = 8 << 20
+	r := bufio.NewReaderSize(f, readBuffer)
 	var buf []byte
 	var base int64
 	found := 0
 	for found < *n {
-		tmp := make([]byte, chunk)
+		tmp := make([]byte, scanChunk)
+		// A short or failed read ends the scan after what it returned.
 		k, err := io.ReadFull(r, tmp)
 		buf = append(buf, tmp[:k]...)
 		for found < *n {
-			i := bytes.Index(buf, []byte("prrf"))
-			if i < 0 || i+512 > len(buf) {
+			i := bytes.Index(buf, []byte(fourCC))
+			if i < 0 || i+headerWindow > len(buf) {
 				break
 			}
-			if i >= 4 {
-				if h, perr := prr.ParseHeader(buf[i-4:]); perr == nil {
+			if i >= sizeFieldLen {
+				if h, perr := prr.ParseHeader(buf[i-sizeFieldLen:]); perr == nil {
 					found++
-					show(found, base+int64(i-4), h)
+					show(found, base+int64(i-sizeFieldLen), h)
 				}
 			}
-			buf = buf[i+4:]
-			base += int64(i + 4)
+			buf = buf[i+len(fourCC):]
+			base += int64(i + len(fourCC))
 		}
 		if err != nil {
 			break
 		}
-		if len(buf) > 512 { // keep a tail in case "prrf" straddles chunks
-			drop := len(buf) - 512
+		if len(buf) > headerWindow { // keep a tail in case "prrf" straddles chunks
+			drop := len(buf) - headerWindow
 			buf = buf[drop:]
 			base += int64(drop)
 		}
 	}
 	if found == 0 {
 		fmt.Println("no ProRes RAW frame headers found")
-		os.Exit(1)
+		os.Exit(exitFailed)
 	}
 }
 
+// show prints one header and the colour derived from it. prrinfo reads no
+// pixels, so white balance or exposure missing from the header shows the
+// neutral default, not what auto measurement would pick.
 func show(i int, off int64, h prr.Header) {
-	ci := convert.ColorFromHeader(h)
+	ci := convert.ColorFromHeader(h, convert.AutoColor{})
 	fmt.Printf("frame %d @%d: vendor=%q v%d %dx%d crop(l%d r%d t%d b%d) bayer=%d range=%d black=%d white=%d\n",
 		i, off, h.Vendor, h.Version, h.Width, h.Height, h.CropLeft, h.CropRight, h.CropTop, h.CropBottom,
 		h.BayerPattern, h.SenselValueRange, h.BlackLevel(), h.WhiteLevel())
