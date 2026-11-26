@@ -68,8 +68,10 @@ const (
 	clipDoneFormat    = "✓ %s → %s (%d frames in %s, %.1f fps)"
 	clipErrorFormat   = "ERROR %s: %v"
 	finishedFormat    = "finished: %d of %d clips converted in %s"
-	estimateFormat    = "≈ %s"
-	unmeasuredFormat  = " (+%d not measured)"
+	estimateFormat    = "Total ≈ %s for %d %s"
+	unmeasuredFormat  = " (+%d not measured yet)"
+	clipWord          = "clip"
+	clipsWord         = "clips"
 	probeErrorFormat  = "cannot read %s: %v"
 	ffmpegFoundFormat = "ffmpeg: %s  (%s)"
 	ffmpegMissingIcon = "⚠ "
@@ -271,18 +273,19 @@ func (u *ui) refreshList() {
 	u.list.Refresh()
 }
 
-// updateEstimate shows the expected size of every measured clip in the
-// chosen compression. Call it on the UI thread.
+// updateEstimate shows the expected size of the whole list, every measured
+// clip together, in the chosen compression. Call it on the UI thread.
 func (u *ui) updateEstimate() {
 	compression := compressionByLabel(u.compression.Selected)
 	var total int64
-	unmeasured := 0
+	measured, unmeasured := 0, 0
 	u.mu.Lock()
 	for _, c := range u.clips {
 		if c.probe == nil {
 			unmeasured++
 			continue
 		}
+		measured++
 		total += convert.EstimateSize(*c.probe, compression, 0)
 	}
 	u.mu.Unlock()
@@ -290,7 +293,11 @@ func (u *ui) updateEstimate() {
 		u.estimate.SetText("")
 		return
 	}
-	text := fmt.Sprintf(estimateFormat, convert.FormatSize(total))
+	noun := clipsWord
+	if measured == 1 {
+		noun = clipWord
+	}
+	text := fmt.Sprintf(estimateFormat, convert.FormatSize(total), measured, noun)
 	if unmeasured > 0 {
 		text += fmt.Sprintf(unmeasuredFormat, unmeasured)
 	}

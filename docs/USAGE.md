@@ -16,7 +16,8 @@ and open them in DaVinci Resolve. Not installed yet? See
 │ │ A001_C004.mov                                queued  │ │
 │ └──────────────────────────────────────────────────────┘ │
 │ Output: [~/Movies/CinemaDNG                  ] [Choose…] │
-│ [✓] Extract audio (WAV)  Compression: [JPEG 12-bit ▾] ≈ 6.2 GB │
+│ [✓] Extract audio (WAV)  Compression: [JPEG 12-bit ▾]    │
+│ Total ≈ 6.2 GB for 12 clips                              │
 │                                       [Cancel] [Convert] │
 │ ██████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  │  ← all clips
 │ log…                                                     │
@@ -36,9 +37,9 @@ and open them in DaVinci Resolve. Not installed yet? See
 3. **Choose the compression.** `JPEG 12-bit (visually lossless)` is the
    default and opens everywhere. For much smaller files that only DaVinci
    Resolve opens, pick a `Resolve only: DCT …` mode. What each mode means:
-   [COMPRESSION.md](COMPRESSION.md). Next to the menu, **≈ size** is about
-   how much space the whole list will take in the chosen mode; it updates as
-   clips are added. It is an estimate: lossless modes vary with the footage,
+   [COMPRESSION.md](COMPRESSION.md). Next to the menu, **Total ≈ … for N
+   clips** is about how much space the whole list will take in the chosen
+   mode, all clips together; it updates as clips are added. It is an estimate: lossless modes vary with the footage,
    and `3:1`/`5:1`/`8:1` can come out larger on clean footage.
 4. **Audio.** With **Extract audio (WAV)** on, the clip's sound is saved next
    to the frames.
