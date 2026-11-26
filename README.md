@@ -29,7 +29,7 @@ from the clip itself, so there are no camera profiles to install.
 ## Get started
 
 1. [Install](docs/INSTALLATION.md): download the archive for macOS, Windows or
-   Linux from the GitHub Releases page; ffmpeg is included.
+   Linux from the [Releases page](https://github.com/mrvenv/prores-raw-to-dng-converter/releases); ffmpeg is included.
 2. [Convert](docs/USAGE.md): open **ProRes Raw to DNG Converter**, drop clips or a card
    folder, pick the output folder and compression, press **Convert**.
 3. Open the output folder in DaVinci Resolve's Media page.

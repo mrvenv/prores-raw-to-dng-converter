@@ -1,6 +1,7 @@
 # Installation
 
-Download the archive for your system from the GitHub Releases page. Every
+Download the archive for your system from the
+[Releases page](https://github.com/mrvenv/prores-raw-to-dng-converter/releases) on GitHub. Every
 archive includes everything rawconv needs, ffmpeg too: there is nothing else
 to install. Versions marked *Pre-release* are betas.
 
@@ -45,7 +46,7 @@ The app needs a desktop with OpenGL (any usual X11 or Wayland desktop).
 
 ## Checking the download
 
-`SHA256SUMS.txt` on the release page lists a checksum for every archive:
+`SHA256SUMS.txt` on the [release page](https://github.com/mrvenv/prores-raw-to-dng-converter/releases) lists a checksum for every archive:
 
 ```sh
 shasum -a 256 rawconv-<version>-macos-arm64.zip   # Linux: sha256sum
@@ -53,7 +54,8 @@ shasum -a 256 rawconv-<version>-macos-arm64.zip   # Linux: sha256sum
 
 ## Updating and uninstalling
 
-To update, download the new version and replace the old app or folder. To
+To update, download the new version from the
+[Releases page](https://github.com/mrvenv/prores-raw-to-dng-converter/releases) and replace the old app or folder. To
 uninstall, delete it. The app remembers your output folder and compression in
 the system's app preferences; they do no harm if left behind.
 
