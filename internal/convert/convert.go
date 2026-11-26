@@ -149,6 +149,9 @@ func Convert(ctx context.Context, src Source, input string, opt Options) (Result
 	}
 	opt.logf("%s: %dx%d, %.3f fps, %d frames, TC %s, audio=%v",
 		filepath.Base(input), probe.Width, probe.Height, probe.FPS(), probe.Frames, probe.TimeCode, probe.HasAudio)
+	if size := EstimateSize(probe, opt.Compression, opt.MaxFrames); size > 0 {
+		opt.logf("estimated size: ≈ %s", FormatSize(size))
+	}
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()

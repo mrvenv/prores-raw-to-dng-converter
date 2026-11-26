@@ -65,10 +65,12 @@ const (
 	statusDone        = "done"
 	statusCancelled   = "cancelled"
 	statusError       = "error"
-	progressFormat    = "%d / %d"
-	clipDoneFormat    = "✓ %s → %s (%d frames, %.1f fps)"
+	clipDoneFormat    = "✓ %s → %s (%d frames in %s, %.1f fps)"
 	clipErrorFormat   = "ERROR %s: %v"
-	finishedFormat    = "finished: %d of %d clips converted"
+	finishedFormat    = "finished: %d of %d clips converted in %s"
+	estimateFormat    = "≈ %s"
+	unmeasuredFormat  = " (+%d not measured)"
+	probeErrorFormat  = "cannot read %s: %v"
 	ffmpegFoundFormat = "ffmpeg: %s  (%s)"
 	ffmpegMissingIcon = "⚠ "
 	placeholderName   = "clip"
@@ -101,6 +103,9 @@ type clip struct {
 	path     string
 	status   string
 	progress float64
+	// probe is filled in the background once ffmpeg is found, for the size
+	// estimate; nil until then or when the clip cannot be read.
+	probe *ffmpeg.Probe
 }
 
 type ui struct {
@@ -113,7 +118,10 @@ type ui struct {
 	audio  *widget.Check
 	// compression offers dng.Compressions by Label; the choice persists
 	// under prefCompression as the mode's String.
-	compression  *widget.Select
+	compression *widget.Select
+	// estimate shows the expected size of the whole list in the chosen
+	// compression.
+	estimate     *widget.Label
 	start        *widget.Button
 	cancel       *widget.Button
 	addBtn       *widget.Button
@@ -175,6 +183,7 @@ func (u *ui) build() {
 		u.clips = nil
 		u.mu.Unlock()
 		u.list.Refresh()
+		u.updateEstimate()
 	})
 
 	u.outDir = widget.NewEntry()
@@ -193,8 +202,10 @@ func (u *ui) build() {
 	})
 	u.audio = widget.NewCheck(audioLabel, nil)
 	u.audio.SetChecked(true)
+	u.estimate = widget.NewLabel("")
 	u.compression = widget.NewSelect(compressionLabels(), func(label string) {
 		u.app.Preferences().SetString(prefCompression, compressionByLabel(label).String())
+		u.updateEstimate()
 	})
 	saved, err := dng.ParseCompression(u.app.Preferences().StringWithFallback(prefCompression, dng.LosslessJPEG12.String()))
 	if err != nil {
@@ -226,7 +237,7 @@ func (u *ui) build() {
 	listArea := container.NewStack(container.NewCenter(hint), u.list)
 	bottom := container.NewVBox(
 		container.NewBorder(nil, nil, widget.NewLabel(outputLabel), browse, u.outDir),
-		container.NewHBox(u.audio, widget.NewLabel(compressionLabel), u.compression, layout.NewSpacer(), u.cancel, u.start),
+		container.NewHBox(u.audio, widget.NewLabel(compressionLabel), u.compression, u.estimate, layout.NewSpacer(), u.cancel, u.start),
 		u.total,
 		u.logBox,
 		widget.NewSeparator(),
@@ -239,7 +250,65 @@ func (u *ui) build() {
 			u.addPath(uri.Path())
 		}
 		u.list.Refresh()
+		u.probeClips()
 	})
+}
+
+// updateEstimate shows the expected size of every measured clip in the
+// chosen compression. Call it on the UI thread.
+func (u *ui) updateEstimate() {
+	compression := compressionByLabel(u.compression.Selected)
+	var total int64
+	unmeasured := 0
+	u.mu.Lock()
+	for _, c := range u.clips {
+		if c.probe == nil {
+			unmeasured++
+			continue
+		}
+		total += convert.EstimateSize(*c.probe, compression, 0)
+	}
+	u.mu.Unlock()
+	if total == 0 {
+		u.estimate.SetText("")
+		return
+	}
+	text := fmt.Sprintf(estimateFormat, convert.FormatSize(total))
+	if unmeasured > 0 {
+		text += fmt.Sprintf(unmeasuredFormat, unmeasured)
+	}
+	u.estimate.SetText(text)
+}
+
+// probeClips reads the size and frame count of every clip not measured
+// yet, in the background, and refreshes the estimate as each one arrives.
+// Call it on the UI thread, once ffmpeg is found.
+func (u *ui) probeClips() {
+	if u.toolErr != nil || u.tools.FFprobe == "" {
+		return
+	}
+	u.mu.Lock()
+	var todo []*clip
+	for _, c := range u.clips {
+		if c.probe == nil {
+			todo = append(todo, c)
+		}
+	}
+	u.mu.Unlock()
+	tools := u.tools
+	go func() {
+		for _, c := range todo {
+			p, err := tools.ProbeFile(context.Background(), c.path)
+			if err != nil {
+				u.logf(probeErrorFormat, filepath.Base(c.path), err)
+				continue
+			}
+			u.mu.Lock()
+			c.probe = &p
+			u.mu.Unlock()
+			fyne.Do(u.updateEstimate)
+		}
+	}()
 }
 
 // defaultOutDir is ~/Movies/CinemaDNG, or CinemaDNG in the working
@@ -270,6 +339,7 @@ func (u *ui) detectFFmpeg() {
 		}
 		u.status.SetText(fmt.Sprintf(ffmpegFoundFormat, t.FFmpeg, t.Version))
 		u.start.Enable()
+		u.probeClips()
 	})
 }
 
@@ -327,6 +397,7 @@ func (u *ui) addFiles() {
 		_ = r.Close()
 		u.addPath(r.URI().Path())
 		u.list.Refresh()
+		u.probeClips()
 	}, u.win)
 	d.SetFilter(storage.NewExtensionFileFilter(clipFilterExtensions()))
 	d.Show()
@@ -347,6 +418,7 @@ func (u *ui) addFolder() {
 		if err == nil && l != nil {
 			u.addPath(l.Path())
 			u.list.Refresh()
+			u.probeClips()
 		}
 	}, u.win)
 }
@@ -398,6 +470,7 @@ func (u *ui) run() {
 	go func() {
 		defer cancel()
 		ok := 0
+		runStart := time.Now()
 		for i, c := range queue {
 			if ctx.Err() != nil {
 				break
@@ -417,7 +490,8 @@ func (u *ui) run() {
 					if total > 0 {
 						frac = float64(done) / float64(total)
 					}
-					u.update(c, fmt.Sprintf(progressFormat, done, total), frac)
+					p := convert.Progress{Done: done, Total: total, Elapsed: time.Since(start)}
+					u.update(c, p.String(), frac)
 					overall := (float64(i) + frac) / float64(len(queue))
 					fyne.Do(func() { u.total.SetValue(overall) })
 				},
@@ -430,10 +504,10 @@ func (u *ui) run() {
 				u.logf(clipErrorFormat, filepath.Base(c.path), err)
 			default:
 				ok++
-				el := time.Since(start).Seconds()
+				el := time.Since(start)
 				u.update(c, statusDone, 1)
 				u.logf(clipDoneFormat, filepath.Base(c.path), res.OutDir,
-					res.Frames, float64(res.Frames)/el)
+					res.Frames, convert.FormatDuration(el), float64(res.Frames)/el.Seconds())
 			}
 		}
 		n := len(queue)
@@ -444,7 +518,7 @@ func (u *ui) run() {
 				u.total.SetValue(1)
 			}
 		})
-		u.logf(finishedFormat, ok, n)
+		u.logf(finishedFormat, ok, n, convert.FormatDuration(time.Since(runStart)))
 	}()
 }
 

@@ -25,6 +25,10 @@ const (
 	usageLine = "usage: rawconv-cli [flags] clip.mov [clip2.mov ...]"
 	// progressInterval limits how often the progress line is redrawn.
 	progressInterval = 500 * time.Millisecond
+	// progressLineFormat redraws the line in place; the trailing spaces
+	// clear what a longer previous line left behind.
+	progressLineFormat = "\r  %s    "
+	doneFormat         = "done: %d frames -> %s (%s, %.1f fps)\n"
 )
 
 func main() {
@@ -74,7 +78,8 @@ func main() {
 			Progress: func(done, total int) {
 				if time.Since(last) > progressInterval || done == total {
 					last = time.Now()
-					fmt.Printf("\r  %d / %d frames", done, total)
+					p := convert.Progress{Done: done, Total: total, Elapsed: time.Since(start)}
+					fmt.Printf(progressLineFormat, p)
 				}
 			},
 		})
@@ -85,8 +90,7 @@ func main() {
 			continue
 		}
 		el := time.Since(start)
-		fmt.Printf("done: %d frames -> %s (%.1fs, %.1f fps)\n", res.Frames, res.OutDir,
-			el.Seconds(), float64(res.Frames)/el.Seconds())
+		fmt.Printf(doneFormat, res.Frames, res.OutDir, convert.FormatDuration(el), float64(res.Frames)/el.Seconds())
 	}
 	if failed > 0 {
 		os.Exit(exitConversionFailed)

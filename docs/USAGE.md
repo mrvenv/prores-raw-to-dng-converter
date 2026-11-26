@@ -11,12 +11,12 @@ and open them in DaVinci Resolve. Not installed yet? See
 │ ffmpeg: …/ffmpeg  (8.0)                                  │  ← ready
 │ [Add clips…] [Add folder…] [Clear]                       │
 │ ┌──────────────────────────────────────────────────────┐ │
-│ │ A001_C003.mov                              12 / 240  │ │  ← clip list
+│ │ A001_C003.mov   12 / 240 · 6.1 fps · 0:02, ~0:37 left │ │  ← clip list
 │ │ ████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  │ │
 │ │ A001_C004.mov                                queued  │ │
 │ └──────────────────────────────────────────────────────┘ │
 │ Output: [~/Movies/CinemaDNG                  ] [Choose…] │
-│ [✓] Extract audio (WAV)  Compression: [JPEG 12-bit ▾]    │
+│ [✓] Extract audio (WAV)  Compression: [JPEG 12-bit ▾] ≈ 6.2 GB │
 │                                       [Cancel] [Convert] │
 │ ██████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  │  ← all clips
 │ log…                                                     │
@@ -36,11 +36,16 @@ and open them in DaVinci Resolve. Not installed yet? See
 3. **Choose the compression.** `JPEG 12-bit (visually lossless)` is the
    default and opens everywhere. For much smaller files that only DaVinci
    Resolve opens, pick a `Resolve only: DCT …` mode. What each mode means:
-   [COMPRESSION.md](COMPRESSION.md).
+   [COMPRESSION.md](COMPRESSION.md). Next to the menu, **≈ size** is about
+   how much space the whole list will take in the chosen mode; it updates as
+   clips are added. It is an estimate: lossless modes vary with the footage,
+   and `3:1`/`5:1`/`8:1` can come out larger on clean footage.
 4. **Audio.** With **Extract audio (WAV)** on, the clip's sound is saved next
    to the frames.
-5. Press **Convert**. Each clip shows its frame count and a bar; the bottom
-   bar is the whole list. **Cancel** stops the conversion; frames already
+5. Press **Convert**. Each clip shows frames done, speed in frames per
+   second, time so far and about how long is left, with a bar; the bottom
+   bar is the whole list. The log says how long each clip and the whole list
+   took. **Cancel** stops the conversion; frames already
    written stay on disk.
 
 The output folder and the compression are remembered for next time.

@@ -28,6 +28,11 @@ rawconv-cli -frames 48 -audio=false -o test clip.mov         # quick test of a s
 | `-j` | automatic | How many frames are written in parallel |
 | `-version` | | Print the version and exit |
 
+While converting, the progress line shows frames done, frames per second,
+time so far and about how long is left (`120 / 450 · 6.1 fps · 0:20, ~0:54
+left`); each clip ends with `done: <frames> frames -> <folder> (<time>, <fps>
+fps)`. Before it starts, the log gives the estimated size of the clip's frames.
+
 Output is the same as the app's: `<output>/<clip>_<mode>/<clip>_<mode>_000000.dng`
 (see [USAGE.md](USAGE.md#what-you-get)).
 
