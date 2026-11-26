@@ -3,7 +3,6 @@ package convert
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -39,20 +38,31 @@ const (
 	spareFrameBuffers = 2
 	// bytesPerSensel is the size of a bayer_rggb16le sample.
 	bytesPerSensel = 2
-	// Read buffers for the two ffmpeg streams; the decoded one carries
+	// Read buffers for the packet and frame streams; the frame one carries
 	// whole 16-bit frames, so it gets the larger buffer.
 	packetReadBuffer = 4 << 20
 	decodeReadBuffer = 8 << 20
-	// decodeThreadType makes ffmpeg decode the tiles of one frame in
-	// parallel. Its default, frame threading, keeps prores_raw on one core;
-	// slice threading decoded a 5.7K clip seven times faster, to identical
-	// output.
-	decodeThreadType = "slice"
-	// audioCodec stores the WAV as 24-bit PCM.
-	audioCodec = "pcm_s24le"
-	// audioDurationFormat is the -t value that trims audio to -frames.
-	audioDurationFormat = "%.6f"
 )
+
+// Source is everything a conversion reads from a clip. Convert runs no
+// processes itself: ffmpeg.Tools is the desktop Source, running ffmpeg and
+// ffprobe; a platform that cannot start processes (iOS, Android) supplies
+// its own, backed by a linked decoder library or the system's decoder.
+type Source interface {
+	// ProbeFile describes the clip.
+	ProbeFile(ctx context.Context, path string) (ffmpeg.Probe, error)
+	// Packets streams the raw ProRes RAW packets of the first video track,
+	// read with prr.PacketReader; maxFrames limits them (0 = all).
+	Packets(ctx context.Context, path string, maxFrames int) (ffmpeg.Stream, error)
+	// Frames streams the same frames decoded to bayer_rggb16le, full sensor
+	// area, Width*Height*2 bytes each, in packet order.
+	Frames(ctx context.Context, path string, maxFrames int) (ffmpeg.Stream, error)
+	// ExtractAudio writes the first audio track as a 24-bit WAV.
+	ExtractAudio(ctx context.Context, req ffmpeg.AudioRequest) error
+}
+
+// ffmpeg.Tools is the desktop Source.
+var _ Source = ffmpeg.Tools{}
 
 // Options controls a conversion.
 type Options struct {
@@ -103,9 +113,9 @@ func OutputName(input string, c dng.Compression) string {
 }
 
 // Convert converts input into the CinemaDNG folder OutputName inside opt.OutDir.
-func Convert(ctx context.Context, tools ffmpeg.Tools, input string, opt Options) (Result, error) {
+func Convert(ctx context.Context, src Source, input string, opt Options) (Result, error) {
 	var res Result
-	probe, err := tools.ProbeFile(ctx, input)
+	probe, err := src.ProbeFile(ctx, input)
 	if err != nil {
 		return res, err
 	}
@@ -143,36 +153,17 @@ func Convert(ctx context.Context, tools ffmpeg.Tools, input string, opt Options)
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	var limit []string
-	if opt.MaxFrames > 0 {
-		limit = []string{"-frames:v", fmt.Sprint(opt.MaxFrames)}
-	}
-	var pktErr, decErr bytes.Buffer
-	pktArgs := append([]string{"-v", "error", "-nostdin", "-i", input, "-map", "0:v:0"}, limit...)
-	pktArgs = append(pktArgs, "-c", "copy", "-f", "data", "-")
-	pktCmd := ffmpeg.Command(ctx, tools.FFmpeg, pktArgs...)
-	pktCmd.Stderr = &pktErr
-	pktOut, err := pktCmd.StdoutPipe()
+	packets, err := src.Packets(ctx, input, opt.MaxFrames)
 	if err != nil {
-		return res, fmt.Errorf("ffmpeg (packets): %w", err)
+		return res, err
 	}
-	decArgs := append([]string{"-v", "error", "-nostdin", "-thread_type", decodeThreadType, "-apply_cropping", "none", "-i", input, "-map", "0:v:0"}, limit...)
-	decArgs = append(decArgs, "-f", "rawvideo", "-pix_fmt", "bayer_rggb16le", "-")
-	decCmd := ffmpeg.Command(ctx, tools.FFmpeg, decArgs...)
-	decCmd.Stderr = &decErr
-	decOut, err := decCmd.StdoutPipe()
+	frames, err := src.Frames(ctx, input, opt.MaxFrames)
 	if err != nil {
-		return res, fmt.Errorf("ffmpeg (decode): %w", err)
-	}
-	if err := pktCmd.Start(); err != nil {
-		return res, fmt.Errorf("start ffmpeg (packets): %w", err)
-	}
-	if err := decCmd.Start(); err != nil {
 		cancel()
-		// The packet process was just killed by cancel; its exit error
-		// says only that, and the start failure is the cause to report.
-		_ = pktCmd.Wait()
-		return res, fmt.Errorf("start ffmpeg (decode): %w", err)
+		// The packet stream was just stopped by cancel; its error says only
+		// that, and the failure to start decoding is the cause to report.
+		_ = packets.Wait()
+		return res, err
 	}
 
 	workers := opt.Workers
@@ -212,8 +203,11 @@ func Convert(ctx context.Context, tools ffmpeg.Tools, input string, opt Options)
 		}()
 	}
 
-	pr := prr.NewPacketReader(bufio.NewReaderSize(pktOut, packetReadBuffer))
-	dec := bufio.NewReaderSize(decOut, decodeReadBuffer)
+	pr := prr.NewPacketReader(bufio.NewReaderSize(packets, packetReadBuffer))
+	dec := bufio.NewReaderSize(frames, decodeReadBuffer)
+	// decodeErr is set when the frame stream ends early; the stream's own
+	// error, known only after Wait, carries the cause.
+	var decodeErr error
 	frameSize := 0
 	idx := 0
 readLoop:
@@ -252,7 +246,8 @@ readLoop:
 		}
 		if _, err := io.ReadFull(dec, buf); err != nil {
 			free <- buf
-			fail(fmt.Errorf("decoding frame %d: %w (%s)", idx, err, strings.TrimSpace(decErr.String())))
+			decodeErr = fmt.Errorf("decoding frame %d: %w", idx, err)
+			fail(decodeErr)
 			break
 		}
 		j := job{idx: idx, buf: buf, hdr: hdr}
@@ -274,13 +269,11 @@ readLoop:
 	}
 	close(jobs)
 	wg.Wait()
-	// Drain so ffmpeg can exit if we stopped reading early. Wait closes
-	// the pipes, which ends both copies; a copy error then is expected and
-	// the processes' own exit status is what gets reported.
-	go func() { _, _ = io.Copy(io.Discard, pktOut) }()
-	go func() { _, _ = io.Copy(io.Discard, decOut) }()
-	pErr, dErr := pktCmd.Wait(), decCmd.Wait()
+	pErr, dErr := packets.Wait(), frames.Wait()
 
+	if decodeErr != nil && dErr != nil {
+		return res, fmt.Errorf("%w: %w", decodeErr, dErr)
+	}
 	if firstErr != nil {
 		return res, firstErr
 	}
@@ -288,25 +281,32 @@ readLoop:
 		return res, err
 	}
 	if pErr != nil {
-		return res, fmt.Errorf("ffmpeg (packets): %v %s", pErr, strings.TrimSpace(pktErr.String()))
+		return res, pErr
 	}
 	if dErr != nil {
-		return res, fmt.Errorf("ffmpeg (decode): %v %s", dErr, strings.TrimSpace(decErr.String()))
+		return res, dErr
 	}
 	res.Frames = int(done.Load())
 
 	if opt.Audio && probe.HasAudio {
-		wav := filepath.Join(outDir, base+".wav")
-		args := []string{"-v", "error", "-nostdin", "-y", "-i", input, "-map", "0:a:0", "-c:a", audioCodec}
+		req := ffmpeg.AudioRequest{Input: input, WAV: filepath.Join(outDir, base+wavExt)}
 		if opt.MaxFrames > 0 && probe.FPS() > 0 {
-			args = append(args, "-t", fmt.Sprintf(audioDurationFormat, float64(res.Frames)/probe.FPS()))
+			req.Duration = framesDuration(res.Frames, probe.FPS())
 		}
-		args = append(args, wav)
-		if out, err := ffmpeg.Command(ctx, tools.FFmpeg, args...).CombinedOutput(); err != nil {
-			return res, fmt.Errorf("audio: %v %s", err, strings.TrimSpace(string(out)))
+		if err := src.ExtractAudio(ctx, req); err != nil {
+			return res, err
 		}
 	}
 	return res, nil
+}
+
+// wavExt names the audio file next to the frames.
+const wavExt = ".wav"
+
+// framesDuration is how long n frames last at fps, so audio trimmed to it
+// matches a -frames conversion.
+func framesDuration(n int, fps float64) time.Duration {
+	return time.Duration(float64(n) / fps * float64(time.Second))
 }
 
 // frameNameFormat names frames <clip>_000000.dng, the CinemaDNG sequence

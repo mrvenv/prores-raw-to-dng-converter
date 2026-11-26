@@ -14,7 +14,7 @@ This file is your operating procedure, not background reading. Follow the steps 
 
 1. Read this file to the end.
 2. Find the code the task touches and **read every file you will edit in full**, not the fragment around the change. Reading with `grep`, `sed -n` or a partial range does not count.
-3. Find the neighbours: code that does the same kind of thing elsewhere (the GUI and the CLI both drive `convert.Convert`; `ffmpeg` and `convert` both run external processes; `dng` and `timecode` both encode binary fields). The change must fit how they work, or they must be brought in line with it (step 2.4).
+3. Find the neighbours: code that does the same kind of thing elsewhere (the GUI and the CLI both drive `convert.Convert`; `ffmpeg` runs every external process and `convert` reads clips only through `convert.Source`; `dng` and `timecode` both encode binary fields). The change must fit how they work, or they must be brought in line with it (step 2.4).
 4. Check `CONTRIBUTING.md` and `docs/` (see "Documentation") for what they say about the area and read it.
 5. If the cause of a bug is not proven by the code or by a real clip, keep investigating; don't build a fix on a guess. For format questions the reference is FFmpeg's source (`libavcodec/prores_raw.c`) and the DNG / CinemaDNG specifications, not memory.
 
@@ -133,6 +133,7 @@ We build on Robert Martin's "Clean Code" and on "Effective Go". Code is for huma
 - The required ffmpeg is 8.0+ with the `prores_raw` decoder; a feature that needs more checks for it the way `HasProResRAW` does.
 - ffmpeg and ffprobe processes are started only through `ffmpeg.Command(ctx, path, args...)`, never `exec.Command` directly: on Windows it hides the console window that a child of the windowed GUI would otherwise get.
 - Arguments are passed as a slice, never through a shell.
+- `internal/convert` runs no processes and knows no ffmpeg flags: it reads a clip only through `convert.Source` (probe, packet stream, frame stream, audio). `ffmpeg.Tools` is the desktop Source; a platform that cannot start processes (iOS, Android) gets its own Source, not branches inside `convert`. Every ffmpeg argument list lives in `internal/ffmpeg` (`stream.go`).
 
 ## GUI (`main.go`, Fyne)
 
@@ -190,13 +191,13 @@ We build on Robert Martin's "Clean Code" and on "Effective Go". Code is for huma
 | `internal/ljpeg/`    | Lossless JPEG (T.81 SOF3) encoder, and a decoder used to verify output in tests                     |
 | `internal/dctjpeg/`  | 12-bit DCT JPEG (T.81 SOF1) encoder for the Resolve modes, and a decoder used to verify output |
 | `internal/jpegbits/` | What both JPEG codecs share: markers, segments, optimal Huffman tables, entropy-coded bit I/O |
-| `internal/ffmpeg/`   | Finding ffmpeg/ffprobe and probing clips                                                            |
+| `internal/ffmpeg/`   | Finding ffmpeg/ffprobe, probing clips, and the processes a conversion runs (`stream.go`: packet and frame streams, audio); `ffmpeg.Tools` implements `convert.Source` |
 | `internal/timecode/` | SMPTE timecode parsing, frame arithmetic and the DNG BCD encoding                                   |
 | `internal/version/`  | `Version`, linked in from `VERSION` at build time                                                  |
 
 ## How a conversion works
 
-`convert.Convert` probes the clip, then runs two ffmpeg processes on it: one copies the raw `prrf` packets (read by `prr.PacketReader` for per-frame metadata: black/white levels, white balance, colour matrix), the other decodes to `bayer_rggb16le`. Frames are paired by index and written by a worker pool into `<output>/<clip>_<compression>/` as `<clip>_<compression>_000000.dng` with timecode (`convert.OutputName`; a ratio's `:` is spelled `to`, e.g. `clip_3to1`); audio is extracted to `<clip>_<compression>.wav` next to them.
+`convert.Convert` reads the clip through a `convert.Source` (on the desktop `ffmpeg.Tools`, which runs ffmpeg): it probes the clip, then opens two streams: one copies the raw `prrf` packets (read by `prr.PacketReader` for per-frame metadata: black/white levels, white balance, colour matrix), the other decodes to `bayer_rggb16le`. Frames are paired by index and written by a worker pool into `<output>/<clip>_<compression>/` as `<clip>_<compression>_000000.dng` with timecode (`convert.OutputName`; a ratio's `:` is spelled `to`, e.g. `clip_3to1`); audio is extracted to `<clip>_<compression>.wav` next to them.
 
 ## Commands
 

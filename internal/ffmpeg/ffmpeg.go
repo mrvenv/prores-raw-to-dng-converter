@@ -1,4 +1,6 @@
-// Package ffmpeg locates ffmpeg/ffprobe binaries and probes input clips.
+// Package ffmpeg locates ffmpeg/ffprobe binaries and runs them: probing a
+// clip, streaming its packets and decoded frames, extracting its audio.
+// Tools is the desktop implementation of convert.Source.
 package ffmpeg
 
 import (
