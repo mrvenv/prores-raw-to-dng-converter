@@ -78,8 +78,11 @@ once, change the compression, and convert again.
 1. In the **Media** page, browse to the output folder and open the clip's
    folder: Resolve shows the frames as one clip.
 2. Add it to the media pool. Timecode, frame rate and audio come along.
-3. Leave the clip's Camera Raw settings **As shot**: white balance, colour and
-   exposure then match the ProRes RAW source.
+3. Leave the clip's Camera Raw settings **As shot**: on a
+   [fully supported camera](../README.md#cameras) white balance, colour and
+   exposure then match the ProRes RAW source. On other cameras, if the image
+   is brighter or darker than the source, set **Decode Using** to **Clip**
+   and adjust **Exposure**.
 
 If Resolve still shows old frames after converting again into the same
 folder, remove the clip from the media pool and import it again.
@@ -98,7 +101,7 @@ the compression reached, and the result. Things to look for:
 
 ## Tips
 
-* Converting is heavy: about 3 frames per second for 5.7K on a laptop. Try a
+* Converting is heavy: about 6 frames per second for 5.7K on a laptop. Try a
   short clip first when you change settings.
 * `resolve-*` frames look black in Finder, Preview and photo apps. That is
   expected; they are for Resolve only.

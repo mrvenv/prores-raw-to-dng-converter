@@ -55,6 +55,8 @@ again with another mode if you need the files elsewhere.
 
 ## Exposure
 
-Frames carry the clip's exposure, so they open in Resolve at the same
-brightness as the ProRes RAW source. macOS previews ignore that setting and
+Frames carry the clip's exposure, so on a
+[fully supported camera](../README.md#cameras) they open in Resolve at the
+same brightness as the ProRes RAW source; on other cameras check it and
+adjust Exposure in Resolve's Camera Raw settings if needed. macOS previews ignore that setting and
 can look darker or brighter; judge exposure in Resolve.
