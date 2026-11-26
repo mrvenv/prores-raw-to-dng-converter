@@ -242,7 +242,8 @@ func (u *ui) build() {
 	listArea := container.NewStack(container.NewCenter(u.hint), u.list)
 	bottom := container.NewVBox(
 		container.NewBorder(nil, nil, widget.NewLabel(outputLabel), browse, u.outDir),
-		container.NewHBox(u.audio, widget.NewLabel(compressionLabel), u.compression, u.estimate, layout.NewSpacer(), u.cancel, u.start),
+		container.NewHBox(u.audio, widget.NewLabel(compressionLabel), u.compression, layout.NewSpacer(), u.cancel, u.start),
+		u.estimate,
 		u.total,
 		u.logBox,
 		widget.NewSeparator(),
