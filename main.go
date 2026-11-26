@@ -109,11 +109,14 @@ type clip struct {
 }
 
 type ui struct {
-	app    fyne.App
-	win    fyne.Window
-	mu     sync.Mutex
-	clips  []*clip
-	list   *widget.List
+	app   fyne.App
+	win   fyne.Window
+	mu    sync.Mutex
+	clips []*clip
+	list  *widget.List
+	// hint invites dropping clips; it shows only while the list is empty,
+	// since the list's rows do not cover it.
+	hint   *widget.Label
 	outDir *widget.Entry
 	audio  *widget.Check
 	// compression offers dng.Compressions by Label; the choice persists
@@ -182,7 +185,7 @@ func (u *ui) build() {
 		u.mu.Lock()
 		u.clips = nil
 		u.mu.Unlock()
-		u.list.Refresh()
+		u.refreshList()
 		u.updateEstimate()
 	})
 
@@ -232,9 +235,9 @@ func (u *ui) build() {
 		u.status,
 		container.NewHBox(u.addBtn, u.addFolderBtn, u.clearBtn),
 	)
-	hint := widget.NewLabel(dropHint)
-	hint.Alignment = fyne.TextAlignCenter
-	listArea := container.NewStack(container.NewCenter(hint), u.list)
+	u.hint = widget.NewLabel(dropHint)
+	u.hint.Alignment = fyne.TextAlignCenter
+	listArea := container.NewStack(container.NewCenter(u.hint), u.list)
 	bottom := container.NewVBox(
 		container.NewBorder(nil, nil, widget.NewLabel(outputLabel), browse, u.outDir),
 		container.NewHBox(u.audio, widget.NewLabel(compressionLabel), u.compression, u.estimate, layout.NewSpacer(), u.cancel, u.start),
@@ -249,9 +252,23 @@ func (u *ui) build() {
 		for _, uri := range uris {
 			u.addPath(uri.Path())
 		}
-		u.list.Refresh()
+		u.refreshList()
 		u.probeClips()
 	})
+}
+
+// refreshList redraws the clip list after clips were added or removed,
+// showing the drop hint only while it is empty. Call it on the UI thread.
+func (u *ui) refreshList() {
+	u.mu.Lock()
+	empty := len(u.clips) == 0
+	u.mu.Unlock()
+	if empty {
+		u.hint.Show()
+	} else {
+		u.hint.Hide()
+	}
+	u.list.Refresh()
 }
 
 // updateEstimate shows the expected size of every measured clip in the
@@ -396,7 +413,7 @@ func (u *ui) addFiles() {
 		// close error loses nothing.
 		_ = r.Close()
 		u.addPath(r.URI().Path())
-		u.list.Refresh()
+		u.refreshList()
 		u.probeClips()
 	}, u.win)
 	d.SetFilter(storage.NewExtensionFileFilter(clipFilterExtensions()))
@@ -417,7 +434,7 @@ func (u *ui) addFolder() {
 	dialog.ShowFolderOpen(func(l fyne.ListableURI, err error) {
 		if err == nil && l != nil {
 			u.addPath(l.Path())
-			u.list.Refresh()
+			u.refreshList()
 			u.probeClips()
 		}
 	}, u.win)
